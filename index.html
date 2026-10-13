@@ -802,4 +802,283 @@
       checkVaultSequence();
     });
 
-    document.getElementById('d3').addEventListener('clic
+    document.getElementById('d3').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (seqState.d1 >= 1 && seqState.d2 >= 3) seqState.d3++;
+      else seqState = { d1: 0, d2: 0, d3: 0 };
+      checkVaultSequence();
+    });
+
+    function checkVaultSequence() {
+      if (seqState.d1 >= 1 && seqState.d2 >= 3 && seqState.d3 >= 4) {
+        seqState = { d1: 0, d2: 0, d3: 0 };
+        document.getElementById('screen404').classList.remove('active');
+        document.getElementById('screenVault').classList.add('active');
+        loadFolders();
+        loadVaultMedia();
+      }
+    }
+
+    document.getElementById('btnCloseVault').addEventListener('click', () => {
+      document.getElementById('screenVault').classList.remove('active');
+    });
+
+    let db = null;
+    let currentFolderItems = [];
+    let currentLightboxIndex = 0;
+
+    const dbReq = indexedDB.open("AtariVaultDB_Safe", 1);
+
+    dbReq.onupgradeneeded = (e) => {
+      db = e.target.result;
+      if (!db.objectStoreNames.contains("media")) {
+        db.createObjectStore("media", { keyPath: "id", autoIncrement: true });
+      }
+      if (!db.objectStoreNames.contains("folders")) {
+        db.createObjectStore("folders", { keyPath: "name" });
+      }
+    };
+
+    dbReq.onsuccess = (e) => {
+      db = e.target.result;
+      const tx = db.transaction("folders", "readwrite");
+      tx.objectStore("folders").put({ name: "Geral" });
+    };
+
+    function loadFolders() {
+      if (!db) return;
+      const select = document.getElementById('folderSelect');
+      select.innerHTML = '';
+      const tx = db.transaction("folders", "readonly");
+      const req = tx.objectStore("folders").getAll();
+
+      req.onsuccess = () => {
+        const folders = req.result;
+        if (folders.length === 0) {
+          const opt = document.createElement('option');
+          opt.value = "Geral";
+          opt.innerText = "📁 Geral";
+          select.appendChild(opt);
+        } else {
+          folders.forEach(f => {
+            const opt = document.createElement('option');
+            opt.value = f.name;
+            opt.innerText = `📁 ${f.name}`;
+            select.appendChild(opt);
+          });
+        }
+      };
+    }
+
+    document.getElementById('btnNewFolder').addEventListener('click', () => {
+      const name = prompt("Nome da nova pasta:");
+      if (!name || !name.trim()) return;
+      const folderName = name.trim();
+
+      const tx = db.transaction("folders", "readwrite");
+      tx.objectStore("folders").put({ name: folderName });
+      tx.oncomplete = () => {
+        loadFolders();
+        document.getElementById('folderSelect').value = folderName;
+        loadVaultMedia();
+      };
+    });
+
+    document.getElementById('folderSelect').addEventListener('change', () => {
+      loadVaultMedia();
+    });
+
+    const uploadZone = document.getElementById('uploadZone');
+    const fileInput = document.getElementById('fileInput');
+
+    uploadZone.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', (e) => {
+      const files = e.target.files;
+      if (!files.length) return;
+      const currentFolder = document.getElementById('folderSelect').value || "Geral";
+
+      for (let file of files) {
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          const tx = db.transaction("media", "readwrite");
+          tx.objectStore("media").add({
+            type: file.type.startsWith('video') ? 'video' : 'image',
+            data: evt.target.result,
+            name: file.name || "midia",
+            folder: currentFolder,
+            date: new Date()
+          });
+          tx.oncomplete = () => loadVaultMedia();
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+
+    function loadVaultMedia() {
+      const grid = document.getElementById('mediaGrid');
+      grid.innerHTML = '';
+      if (!db) return;
+
+      const currentFolder = document.getElementById('folderSelect').value || "Geral";
+      const tx = db.transaction("media", "readonly");
+      const req = tx.objectStore("media").getAll();
+
+      req.onsuccess = () => {
+        const items = req.result;
+        currentFolderItems = items.filter(item => (item.folder || "Geral") === currentFolder);
+
+        currentFolderItems.forEach((item, index) => {
+          const mediaDiv = document.createElement('div');
+          mediaDiv.className = 'media-item';
+
+          let el;
+          if (item.type === 'image') {
+            el = document.createElement('img');
+            el.src = item.data;
+          } else {
+            el = document.createElement('video');
+            el.src = item.data;
+          }
+
+          mediaDiv.addEventListener('click', () => openLightbox(index));
+
+          const actionsDiv = document.createElement('div');
+          actionsDiv.className = 'media-actions';
+
+          const restoreBtn = document.createElement('button');
+          restoreBtn.className = 'media-btn-mini';
+          restoreBtn.innerText = '📥';
+          restoreBtn.title = 'Restaurar/Baixar';
+          restoreBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            restoreMediaItem(item);
+          });
+
+          const delBtn = document.createElement('button');
+          delBtn.className = 'media-btn-mini del';
+          delBtn.innerText = '✕';
+          delBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            deleteMedia(item.id);
+          });
+
+          actionsDiv.appendChild(restoreBtn);
+          actionsDiv.appendChild(delBtn);
+          mediaDiv.appendChild(el);
+          mediaDiv.appendChild(actionsDiv);
+          grid.appendChild(mediaDiv);
+        });
+      };
+    }
+
+    function deleteMedia(id) {
+      if (!confirm("Deseja excluir permanentemente?")) return;
+      const tx = db.transaction("media", "readwrite");
+      tx.objectStore("media").delete(id);
+      tx.oncomplete = () => loadVaultMedia();
+    }
+
+    function restoreMediaItem(item) {
+      const a = document.createElement('a');
+      a.href = item.data;
+      a.download = item.name || (item.type === 'image' ? 'foto_restaurada.jpg' : 'video_restaurado.mp4');
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    function openLightbox(index) {
+      if (!currentFolderItems.length) return;
+      currentLightboxIndex = index;
+      renderLightboxMedia();
+      document.getElementById('lightbox').classList.add('active');
+    }
+
+    function renderLightboxMedia() {
+      const item = currentFolderItems[currentLightboxIndex];
+      if (!item) return;
+
+      const container = document.getElementById('lightboxMediaContainer');
+      container.innerHTML = '';
+      document.getElementById('lightboxInfo').innerText = `${currentLightboxIndex + 1}/${currentFolderItems.length} - ${item.folder || 'Geral'}`;
+
+      if (item.type === 'image') {
+        const img = document.createElement('img');
+        img.src = item.data;
+        img.className = 'lightbox-content';
+        container.appendChild(img);
+      } else {
+        const video = document.createElement('video');
+        video.src = item.data;
+        video.controls = true;
+        video.autoplay = true;
+        video.className = 'lightbox-content';
+        container.appendChild(video);
+      }
+    }
+
+    function showPrevMedia() {
+      if (currentLightboxIndex > 0) {
+        currentLightboxIndex--;
+        renderLightboxMedia();
+      }
+    }
+
+    function showNextMedia() {
+      if (currentLightboxIndex < currentFolderItems.length - 1) {
+        currentLightboxIndex++;
+        renderLightboxMedia();
+      }
+    }
+
+    let touchStartX = 0;
+    let touchEndX = 0;
+    const lightboxBody = document.getElementById('lightboxBody');
+
+    lightboxBody.addEventListener('touchstart', (e) => {
+      touchStartX = e.changedTouches[0].screenX;
+    }, { passive: true });
+
+    lightboxBody.addEventListener('touchend', (e) => {
+      touchEndX = e.changedTouches[0].screenX;
+      const diff = touchEndX - touchStartX;
+      if (Math.abs(diff) > 40) {
+        if (diff < 0) {
+          showNextMedia();
+        } else {
+          showPrevMedia();
+        }
+      }
+    }, { passive: true });
+
+    document.getElementById('btnCloseLightbox').addEventListener('click', () => {
+      document.getElementById('lightbox').classList.remove('active');
+      document.getElementById('lightboxMediaContainer').innerHTML = '';
+    });
+
+    document.getElementById('btnRestoreMedia').addEventListener('click', () => {
+      const item = currentFolderItems[currentLightboxIndex];
+      if (item) restoreMediaItem(item);
+    });
+
+    document.getElementById('btnMoveMedia').addEventListener('click', () => {
+      const item = currentFolderItems[currentLightboxIndex];
+      if (!item) return;
+      const newFolder = prompt("Mover para qual pasta?", item.folder || "Geral");
+      if (!newFolder) return;
+
+      const tx = db.transaction("media", "readwrite");
+      item.folder = newFolder.trim();
+      tx.objectStore("media").put(item);
+      tx.oncomplete = () => {
+        loadFolders();
+        loadVaultMedia();
+        document.getElementById('lightbox').classList.remove('active');
+        alert("Item movido com sucesso!");
+      };
+    });
+  </script>
+</body>
+</html>
+```
